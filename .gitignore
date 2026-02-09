@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+
+# Envs
+.venv/
+env/
+venv/
+
+# Logs / outputs
+runs/
+wandb/
+*.log
+
+# OS
+.DS_Store

@@ -1,0 +1,40 @@
+# ChestMNIST (MedMNIST v2) + Swin-Base (timm)
+run:
+  name: chestmnist_swinb_224
+  output_dir: runs
+  seed: 42
+
+data:
+  root: ./data
+  dataset: chestmnist
+  image_size: 224
+  batch_size: 64
+  num_workers: 8
+  pin_memory: true
+
+model:
+  name: swin_base_patch4_window7_224
+  pretrained: true
+  num_classes: 14
+
+train:
+  epochs: 30
+  amp: true
+  grad_clip_norm: 1.0
+  # Use pos_weight in BCEWithLogitsLoss to help imbalanced labels
+  use_pos_weight: true
+
+optim:
+  name: adamw
+  lr: 1.0e-4
+  weight_decay: 5.0e-2
+  betas: [0.9, 0.999]
+
+sched:
+  name: cosine
+  warmup_epochs: 2
+  min_lr: 1.0e-6
+
+eval:
+  threshold: 0.5
+  best_metric: val_auc  # used to select best checkpoint
