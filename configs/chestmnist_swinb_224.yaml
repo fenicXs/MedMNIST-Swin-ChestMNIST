@@ -5,7 +5,7 @@ run:
   seed: 42
 
 data:
-  root: ./data
+  root:  /scratch/pkrish52/medmnist_data
   dataset: chestmnist
   image_size: 224
   batch_size: 64
@@ -22,7 +22,7 @@ train:
   amp: true
   grad_clip_norm: 1.0
   # Use pos_weight in BCEWithLogitsLoss to help imbalanced labels
-  use_pos_weight: true
+  use_pos_weight: false
 
 optim:
   name: adamw

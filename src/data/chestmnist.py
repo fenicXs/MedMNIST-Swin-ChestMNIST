@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 from torchvision import transforms
 
+import numpy as np
 
 class IndexedDataset(Dataset):
     """Wrap a dataset to also return the sample index."""
@@ -89,12 +90,14 @@ def make_chestmnist_dataloaders(
         imgs, labels = zip(*batch)
         imgs = torch.stack(list(imgs), dim=0)
         labels = torch.as_tensor(labels, dtype=torch.float32)
+        labels = torch.from_numpy(np.stack(labels, axis=0)).float()
         return imgs, labels
 
     def collate_eval(batch):
         imgs, labels, idxs = zip(*batch)
         imgs = torch.stack(list(imgs), dim=0)
         labels = torch.as_tensor(labels, dtype=torch.float32)
+        labels = torch.from_numpy(np.stack(labels, axis=0)).float()
         idxs = torch.as_tensor(idxs, dtype=torch.int64)
         return imgs, labels, idxs
 
