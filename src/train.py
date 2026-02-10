@@ -9,7 +9,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from rich.console import Console
-from torch.cuda.amp import GradScaler, autocast
+from torch.cuda.amp import GradScaler
+from torch.amp import autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 import yaml
@@ -118,7 +119,8 @@ def train_one_epoch(
 
         optimizer.zero_grad(set_to_none=True)
 
-        with autocast(enabled=bool(cfg["train"]["amp"])):
+        device_type = "cuda" if x.is_cuda else "cpu"
+        with autocast(device_type=device_type, enabled=bool(cfg["train"]["amp"])):
             logits = model(x)
             loss = criterion(logits, y)
 
