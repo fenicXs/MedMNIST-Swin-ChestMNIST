@@ -13,6 +13,7 @@ from torch.cuda.amp import GradScaler
 from torch.amp import autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
+from timm.utils import ModelEmaV2
 import yaml
 
 from src.data.chestmnist import make_chestmnist_dataloaders
@@ -23,6 +24,11 @@ from src.utils.metrics import multilabel_auc_and_acc
 from src.utils.seed import seed_everything
 
 console = Console()
+
+
+def unwrap_model(m: torch.nn.Module) -> torch.nn.Module:
+    """Return the underlying model (unwrap DDP if needed)."""
+    return m.module if isinstance(m, DDP) else m
 
 
 def parse_args() -> argparse.Namespace:
@@ -88,6 +94,7 @@ def train_one_epoch(
     epoch: int,
     cfg: Dict[str, Any],
     steps_per_epoch: int,
+    ema: ModelEmaV2 | None = None,
 ):
     model.train()
     running_loss = 0.0
@@ -132,6 +139,10 @@ def train_one_epoch(
 
         scaler.step(optimizer)
         scaler.update()
+
+        # Update EMA after optimizer step so it tracks the post-update weights.
+        if ema is not None:
+            ema.update(unwrap_model(model))
 
         running_loss += float(loss.item())
 
@@ -267,14 +278,30 @@ def main():
     # Resume
     start_epoch = 0
     best_auc = -1.0
+    ckpt_resume = None
     if args.resume:
-        ckpt = torch.load(args.resume, map_location="cpu")
-        (model.module if isinstance(model, DDP) else model).load_state_dict(ckpt["model"])
-        if "optimizer" in ckpt:
-            optimizer.load_state_dict(ckpt["optimizer"])
-        if "epoch" in ckpt:
-            start_epoch = int(ckpt["epoch"]) + 1
-        best_auc = float(ckpt.get("best_metric", best_auc))
+        ckpt_resume = torch.load(args.resume, map_location="cpu")
+        unwrap_model(model).load_state_dict(ckpt_resume["model"], strict=True)
+        if "optimizer" in ckpt_resume:
+            optimizer.load_state_dict(ckpt_resume["optimizer"])
+        if "epoch" in ckpt_resume:
+            start_epoch = int(ckpt_resume["epoch"]) + 1
+        best_auc = float(ckpt_resume.get("best_metric", best_auc))
+
+    # EMA
+    ema = None
+    ema_cfg = cfg.get("train", {}).get("ema", {})
+    if bool(ema_cfg.get("enabled", False)):
+        ema = ModelEmaV2(
+            unwrap_model(model),
+            decay=float(ema_cfg.get("decay", 0.9999)),
+            device=ema_cfg.get("device", None),
+        )
+        # If resuming and EMA state is present, restore it
+        if ckpt_resume is not None and "ema" in ckpt_resume:
+            ema.module.load_state_dict(ckpt_resume["ema"], strict=True)
+
+    use_ema_eval = bool(cfg.get("eval", {}).get("use_ema", False))
 
     # Train loop
     epochs = int(cfg["train"]["epochs"])
@@ -292,9 +319,11 @@ def main():
             epoch=epoch,
             cfg=cfg,
             steps_per_epoch=steps_per_epoch,
+            ema=ema,
         )
 
-        val_auc, val_acc = evaluate(model, loaders.val, device, threshold=threshold, distributed=distributed)
+        eval_model = ema.module if (ema is not None and use_ema_eval) else model
+        val_auc, val_acc = evaluate(eval_model, loaders.val, device, threshold=threshold, distributed=distributed)
 
         if is_main_process():
             console.print(f"Epoch {epoch:03d} | loss={train_loss:.4f} | val_auc={val_auc:.4f} | val_acc={val_acc:.4f}")
@@ -303,13 +332,15 @@ def main():
             writer.add_scalar("val/acc", val_acc, epoch)
 
             # Save last
+            extra = {"ema": ema.module.state_dict()} if ema is not None else None
             save_checkpoint(
                 ckpt_dir / "last.pt",
-                model.module if isinstance(model, DDP) else model,
+                unwrap_model(model),
                 optimizer=optimizer,
                 scheduler=None,
                 epoch=epoch,
                 best_metric=best_auc,
+                extra=extra,
             )
 
             # Save best
@@ -317,11 +348,12 @@ def main():
                 best_auc = val_auc
                 save_checkpoint(
                     ckpt_dir / "best.pt",
-                    model.module if isinstance(model, DDP) else model,
+                    unwrap_model(model),
                     optimizer=optimizer,
                     scheduler=None,
                     epoch=epoch,
                     best_metric=best_auc,
+                    extra=extra,
                 )
 
     # Final test on best (all ranks compute; rank0 prints)
@@ -332,7 +364,12 @@ def main():
 
     best_path = ckpt_dir / "best.pt"
     ckpt = torch.load(best_path, map_location="cpu")
-    (model.module if isinstance(model, DDP) else model).load_state_dict(ckpt["model"])
+
+    # Prefer EMA weights for final test if configured and available in checkpoint
+    if bool(cfg.get("eval", {}).get("use_ema", False)) and ("ema" in ckpt):
+        unwrap_model(model).load_state_dict(ckpt["ema"], strict=True)
+    else:
+        unwrap_model(model).load_state_dict(ckpt["model"], strict=True)
 
     test_auc, test_acc = evaluate(model, loaders.test, device, threshold=threshold, distributed=distributed)
 

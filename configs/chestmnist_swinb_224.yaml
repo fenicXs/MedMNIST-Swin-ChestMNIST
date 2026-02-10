@@ -24,6 +24,12 @@ train:
   # Use pos_weight in BCEWithLogitsLoss to help imbalanced labels
   use_pos_weight: false
 
+  # Exponential Moving Average (EMA) of weights (often stabilizes and slightly improves AUC)
+  ema:
+    enabled: true
+    decay: 0.9999
+    device: null   # keep on GPU; set to "cpu" only if you're tight on VRAM
+
 optim:
   name: adamw
   lr: 1.0e-4
@@ -38,3 +44,6 @@ sched:
 eval:
   threshold: 0.5
   best_metric: val_auc  # used to select best checkpoint
+
+  # Evaluate / select checkpoints using EMA weights (if present)
+  use_ema: true

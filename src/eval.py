@@ -21,6 +21,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", type=str, required=True)
     p.add_argument("--ckpt", type=str, required=True)
     p.add_argument("--split", type=str, default="test", choices=["val", "test"])
+    p.add_argument(
+        "--use_ema",
+        action="store_true",
+        help="If set, prefer EMA weights from the checkpoint when available (overrides config).",
+    )
     return p.parse_args()
 
 
@@ -80,7 +85,14 @@ def main():
     ).to(device)
 
     ckpt = torch.load(args.ckpt, map_location="cpu")
-    model.load_state_dict(ckpt["model"], strict=True)
+
+    use_ema_cfg = bool(cfg.get("eval", {}).get("use_ema", False))
+    use_ema = bool(args.use_ema or use_ema_cfg)
+
+    if use_ema and ("ema" in ckpt):
+        model.load_state_dict(ckpt["ema"], strict=True)
+    else:
+        model.load_state_dict(ckpt["model"], strict=True)
 
     loader = loaders.val if args.split == "val" else loaders.test
     m = eval_split(model, loader, device, threshold=float(cfg["eval"]["threshold"]))
